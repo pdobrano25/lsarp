@@ -34,7 +34,7 @@ Conducts host biopsy proteomics and mucosal bacteriome analyses for CD participa
 
 ---
 
-*RapidAIM analyses*: **[2026_01_08_lsarp_rapidaim_test](https://github.com/pdobrano25/rs_study/blob/main/2026_01_08_lsarp_rapidaim_test.R)**
+*RapidAIM analyses*: **[2026_01_08_lsarp_rapidaim_analysis](https://github.com/pdobrano25/rs_study/blob/main/2026_01_08_lsarp_rapidaim_test.R)**
 
 Conducts analyses including RS selections and machine learning on RapidAIM data.
 
