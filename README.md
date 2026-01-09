@@ -5,11 +5,11 @@ Version 2026_01_08
 
 ---
 
-Mapping, pH, SCFA, and processed meta-omics data are available in **[lsarp_supp_data](https://github.com/pdobrano25/lsarp/blob/main/lsarp_data)**
+Mapping, pH, and processed meta-omics data are available in **[lsarp_supp_data](https://github.com/pdobrano25/lsarp/blob/main/lsarp_data)**
 
-16S data are available under NCBI SRA PRJNA1348138.
+16S data are available under NCBI SRA ?.
 
-Metaproteomics data are available under PRIDE PXD048985.
+Metaproteomics data are available under PRIDE ?.
 
 Code and analyses for each section of the manuscript:
 
