@@ -41,7 +41,7 @@ Conducts analyses including RS selections and machine learning on RapidAIM data.
 ---
 
 
-*UC analyses*: **[2026_01_08_lsarp_uc_analysis](https://github.com/pdobrano25/rs_study/blob/main/2026_01_08_lsarp_uc_analysis.R)**
+*UC analyses*: **[2026_01_08_lsarp_uc_analysis](https://github.com/pdobrano25/lsarp/blob/main/2026_01_08_lsarp_uc_analysis.R)**
 
 Conducts data processing and 16S analyses for UC participants.
 
