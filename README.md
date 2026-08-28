@@ -1,7 +1,7 @@
 ***Personalized resistant starch enriches butyrate-producing bacteria and upregulates mucosal mitochondrial proteins in therapeutically responsive children with new-onset Crohn's disease: A prospective, randomized, placebo-controlled trial.***
 
 Peter Dobranowski
-Version 2026_01_08
+Version 2026_08_28
 
 ---
 
