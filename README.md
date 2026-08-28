@@ -22,7 +22,7 @@ Prepares FFQ data (with minimal analyses), 16S data variables (e.g. butyrogens, 
 
 ---
 
-*Stool analyses*: **[2026_01_08_lsarp_analysis](https://github.com/pdobrano25/lsarp/blob/main/2026_01_08_lsarp_analysis.R)**
+*Stool analyses*: **[2026_01_08_lsarp_analysis](https://github.com/pdobrano25/lsarp/blob/main/2026_05_16_lsarp_analysis_DI.R)**
 
 Conducts major stool multi-omic analyses, including group-level, response group-level, and machine learning for CD participants.
 
@@ -41,7 +41,7 @@ Conducts analyses including RS selections and machine learning on RapidAIM data.
 ---
 
 
-*UC analyses*: **[2026_01_08_lsarp_uc_analysis](https://github.com/pdobrano25/lsarp/blob/main/2026_01_08_lsarp_uc_analysis.R)**
+*UC analyses*: **[2026_01_08_lsarp_uc_analysis](https://github.com/pdobrano25/lsarp/blob/main/2026_05_18_lsarp_uc_analysis_DI.R)**
 
 Conducts data processing and 16S analyses for UC participants.
 
