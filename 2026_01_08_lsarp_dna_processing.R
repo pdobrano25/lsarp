@@ -200,6 +200,8 @@ redcap.data.ffq$HM = substr(redcap.data.ffq$standard.name, 1, 6)
 redcap.data.ffq = subset(redcap.data.ffq, standard.name %in% subset(metadata.lsarp.stool, baseline=="baseline")$standard.name)
 # only 12 have baseline FFQ
 
+# NOTE: Cannot replicate OARS nutrient analysis because we don't have complete longitudinal data!
+
 # now for calculated nutrients, fibre, RS, etc
 # clean up to extract out necessary diet data (including BSA (m2))
 lsarp.redcap.data.loaded = subset(lsarp.redcap.data.loaded, !is.na(dose))[,c("study_id", "fecalcal_res","ffq.date",
@@ -303,6 +305,8 @@ lsarp.redcap.data.loaded$fibre_adj = lsarp.redcap.data.loaded$dietary_fibre / ls
 # numbers
 lsarp.redcap.data.loaded[,c("HM", "group")] %>% table()
 lsarp.redcap.data.loaded[,c("HM", "group")] %>% distinct() %>% dplyr::select("group") %>% table()
+
+
 
 
 # :: ``` longitudinal fiber plot -----------------------------------------------------------
@@ -489,7 +493,7 @@ lsarp.fiber.comparison.plot = ggplot(metadata.lsarp.stool[,c("HM", "ave.fiber", 
   ggbeeswarm::geom_beeswarm(aes(fill=group), color="white", shape=21, size=3)+
   ylim(c(5,20))+
   annotate(geom="text", y=Inf, x=1.5, vjust=1.5, size=4,
-           label=paste("p: ", round(lsarp.fiber.mean.pval, digits=3), sep=""))+
+           label=paste("𝘱: ", round(lsarp.fiber.mean.pval, digits=3), sep=""))+
   theme_classic()+theme(legend.position="none",
                         strip.text=element_text(size=10))+
   facet_wrap(~"Average Fiber Intake")+
@@ -503,8 +507,9 @@ write.csv(metadata.lsarp.stool, "./2025_07_24_lsarp_fiber.csv")
 # final version
 (metadata.lsarp.rs.plot+metadata.lsarp.rs.supp.plot+
     metadata.lsarp.fiber.plot+lsarp.fiber.comparison.plot) %>%
-  ggsave(filename="./lsarp_plots/2026_01_08_lsarp_1_ffq_fiber_rs.pdf",
-         width=10, height=6.5)
+  ggsave(filename="./lsarp_plots/2026_03_01_lsarp_1_ffq_fiber_rs.pdf",
+         width=10, height=6.5,
+         device=cairo_pdf)
 
 # Brief methods write up:
 # Fiber intakes were calculated from Monash FFQ and adjusted for calculated energy intake. 
@@ -1441,20 +1446,81 @@ lsarp.cd.mgx.mlp.preds = readRDS("./2025_09_15_lsarp_cd_mlp_mgx.Rds")
 
 lsarp.mpx = read.csv("./metaproteomics/MetaLab_iterative/final_proteins.tsv", sep="\t")
 dim(lsarp.mpx)
-# clean and filter to LSARP samples
-colnames(lsarp.mpx)[c(1:9)] # keep 1 (protein ID), 8 and onwards (samples)
-colnames(lsarp.mpx)[c(499:504)] # remove last 5 (non-samples)
-lsarp.mpx = lsarp.mpx[,c(1, 8:499)]
+colnames(lsarp.mpx)
+# note: these include OARS samples
+
+# add plate number to samples in pro data
+# 1), remove Intensity
+colnames(lsarp.mpx) = gsub("Intensity\\.", "", colnames(lsarp.mpx))
+# 2) remove Sara_Stintzi
+colnames(lsarp.mpx) = gsub("Sara_Stintzi", "", colnames(lsarp.mpx))
+colnames(lsarp.mpx) = gsub("Lab", "", colnames(lsarp.mpx))
+# 3) subset to important samples
+lsarp.mpx = lsarp.mpx[,grepl(paste(c("Protein.IDs", "HM", "QC"), collapse="|"),colnames(lsarp.mpx))]
+
+
+# save mapping file (with plate locations), but needs cleaning
+lsarp.mpx.map = read.csv("./metaproteomics/metaproteomics_mapping.csv")
+# do the same for mapping
+lsarp.mpx.map = lsarp.mpx.map %>%
+  mutate(clean = gsub("Intensity\\.", "",
+                      gsub("Sara_Stintzi", "", gsub("Lab", "", sample)))) 
+lsarp.mpx.map = lsarp.mpx.map %>%
+  tidyr::separate(clean, sep="__", into=c("date", "standard.name"))
+# replace _ with -
+lsarp.mpx.map$standard.name = gsub("_", "-", lsarp.mpx.map$standard.name)
+# use this map to test in analysis
+# and add extra consideration for seq replicates
+lsarp.mpx.map.plates = lsarp.mpx.map %>%
+  group_by(standard.name) %>%
+  #subset(standard.name == "HM0878-STL-11")%>%
+  mutate(plate = str_c(plate, collapse = "_")) %>%
+  dplyr::select(plate, standard.name) %>% distinct()
+
+# >> MPX QC ---------------------------------------------------------------
+
+# check QC samples
+lsarp.mpx.qc = lsarp.mpx[,!grepl("HM", colnames(lsarp.mpx))]
+colnames(lsarp.mpx.qc)
+lsarp.mpx.qc = lsarp.mpx.qc[,c(1, 8:499)]
+rownames(lsarp.mpx.qc) = lsarp.mpx.qc[,1]
+lsarp.mpx.qc[,1] = NULL
+
+# (log2 + pseudo)
+lsarp.mpx.qc.log = t(log2(lsarp.mpx.qc+(min(lsarp.mpx.qc[lsarp.mpx.qc!=0])/2)))
+# filter out 0 variance
+lsarp.mpx.qc.log = lsarp.mpx.qc.log[,apply(lsarp.mpx.qc.log, 2, sd)>0]
+# pca
+lsarp.mpx.qc.pca = prcomp(lsarp.mpx.qc.log,
+                          scale=T, center=T)
+lsarp.mpx.qc.pca.df = data.frame(lsarp.mpx.qc.pca$x[,c(1:2)])
+lsarp.mpx.qc.pca.var = (lsarp.mpx.qc.pca$sdev)^2 / sum(lsarp.mpx.qc.pca$sdev^2) * 100
+
+# plot
+ggplot(lsarp.mpx.qc.pca.df%>%
+         mutate(sample = rownames(.)),
+       aes(x=PC1, y=PC2))+
+  geom_point(shape=21, fill="black", color="white", size=3)+
+  ggnetwork::geom_nodetext_repel(aes(label=sample))+
+  theme_classic()+
+  theme(strip.text = element_text(size=10))+
+  labs(x=paste("PC1 (", round(lsarp.mpx.qc.pca.var[1], digits=1), "%)", sep=""),
+       y=paste("PC2 (", round(lsarp.mpx.qc.pca.var[2], digits=1), "%)", sep=""))+
+  facet_wrap(~"PCA of QC samples (Protein)")
+# appears like #.2 has concerningly higher variance
+
+# try with functional annotations
+
+
+# >> MPX samples ----------------------------------------------------------
 
 # clean colnames (to be consistent with one another)
-colnames(lsarp.mpx) = gsub("Intensity\\.\\d{4}_\\d{2}_\\d{2}_Sara_StintziLab_", "", colnames(lsarp.mpx))
-colnames(lsarp.mpx) = gsub("Intensity\\.\\d{4}_\\d{2}_\\d{2}_Sara_Stintzi_", "", colnames(lsarp.mpx))
+colnames(lsarp.mpx) = gsub(".*__", "", colnames(lsarp.mpx))
 
 # filter to lsarp samples
 lsarp.mpx.lsarp.only = lsarp.mpx[,colnames(lsarp.mpx) %in% c("Protein.IDs", "QC",
                                                          gsub("-", "_", metadata.lsarp.stool$standard.name))]
 colnames(lsarp.mpx.lsarp.only) = gsub("\\.1", "",colnames(lsarp.mpx.lsarp.only))
-dim(lsarp.mpx.lsarp.only)
 
 # load functional annotations
 mpx.functions = read.csv("./metaproteomics/MetaLab_iterative/functional_annotation/functions.tsv", sep="\t", header=F)
@@ -1535,7 +1601,7 @@ protein.collapser = function(data,
   colnames(data.melt)[2] = "code"
   # sum proteins by annotation per sample (code)
   data.melt.meta.summed <- data.melt %>%
-    group_by(code, annotation) %>% # group by stool sample
+    group_by(code, annotation) %>% # group by stool sample (and potential seq replicates)
     mutate(sum.intensity = sum(value)) %>%
     dplyr::select(code, annotation, sum.intensity) %>% distinct() %>% data.frame()
   
@@ -1544,6 +1610,71 @@ protein.collapser = function(data,
 }
 # checked
 
+
+# >> MPX QC PATHWAY ---------------------------------------------------------------
+
+
+lsarp.mpx.qc.kegg = protein.collapser(data = as.matrix((lsarp.mpx.qc)),
+                                      protein.information = mpx.functions,
+                                      annotation="KEGG_Pathway_Name",
+                                      delimiter = ";")
+lsarp.mpx.qc.kegg = reshape2::acast(lsarp.mpx.qc.kegg, code ~ annotation, value.var="sum.intensity")
+lsarp.mpx.qc.kegg[is.na(lsarp.mpx.qc.kegg)] = 0
+# (log10 + pseudo)
+lsarp.mpx.qc.kegg.log = (log10(lsarp.mpx.qc.kegg+(min(lsarp.mpx.qc.kegg[lsarp.mpx.qc.kegg!=0])/2)))
+# filter out 0 variance
+lsarp.mpx.qc.kegg.log = lsarp.mpx.qc.kegg.log[,apply(lsarp.mpx.qc.kegg.log, 2, sd)>0]
+# pca
+lsarp.mpx.qc.kegg.log.pca = prcomp(lsarp.mpx.qc.kegg.log,
+                          scale=T, center=T)
+lsarp.mpx.qc.kegg.log.pca.df = data.frame(lsarp.mpx.qc.kegg.log.pca$x[,c(1:2)])
+lsarp.mpx.qc.kegg.log.pca.var = (lsarp.mpx.qc.kegg.log.pca$sdev)^2 / sum(lsarp.mpx.qc.kegg.log.pca$sdev^2) * 100
+
+# plot
+ggplot(lsarp.mpx.qc.kegg.log.pca.df%>%
+         mutate(sample = rownames(.)),
+       aes(x=PC1, y=PC2))+
+  geom_point(shape=21, fill="black", color="white", size=3)+
+  ggnetwork::geom_nodetext_repel(aes(label=sample))+
+  theme_classic()+
+  theme(strip.text = element_text(size=10))+
+  labs(x=paste("PC1 (", round(lsarp.mpx.qc.kegg.log.pca.var[1], digits=1), "%)", sep=""),
+       y=paste("PC2 (", round(lsarp.mpx.qc.kegg.log.pca.var[2], digits=1), "%)", sep=""))+
+  facet_wrap(~"PCA of QC samples (KEGG)")
+# variance shrinks when collapsing to high-level functions
+
+# >> MPX QC COG ---------------------------------------------------------------
+
+lsarp.mpx.qc.cog = protein.collapser(data = as.matrix((lsarp.mpx.qc)),
+                                      protein.information = mpx.functions,
+                                      annotation="COG_name",
+                                      delimiter = ",")
+lsarp.mpx.qc.cog = reshape2::acast(lsarp.mpx.qc.cog, code ~ annotation, value.var="sum.intensity")
+lsarp.mpx.qc.cog[is.na(lsarp.mpx.qc.cog)] = 0
+# (log10 + pseudo)
+lsarp.mpx.qc.cog.log = (log10(lsarp.mpx.qc.cog+(min(lsarp.mpx.qc.cog[lsarp.mpx.qc.cog!=0])/2)))
+# filter out 0 variance
+lsarp.mpx.qc.cog.log = lsarp.mpx.qc.cog.log[,apply(lsarp.mpx.qc.cog.log, 2, sd)>0]
+# pca
+lsarp.mpx.qc.cog.log.pca = prcomp(lsarp.mpx.qc.cog.log,
+                                   scale=T, center=T)
+lsarp.mpx.qc.cog.log.pca.df = data.frame(lsarp.mpx.qc.cog.log.pca$x[,c(1:2)])
+lsarp.mpx.qc.cog.log.pca.var = (lsarp.mpx.qc.cog.log.pca$sdev)^2 / sum(lsarp.mpx.qc.cog.log.pca$sdev^2) * 100
+
+# plot
+ggplot(lsarp.mpx.qc.cog.log.pca.df%>%
+         mutate(sample = rownames(.)),
+       aes(x=PC1, y=PC2))+
+  geom_point(shape=21, fill="black", color="white", size=3)+
+  ggnetwork::geom_nodetext_repel(aes(label=sample))+
+  theme_classic()+
+  theme(strip.text = element_text(size=10))+
+  labs(x=paste("PC1 (", round(lsarp.mpx.qc.cog.log.pca.var[1], digits=1), "%)", sep=""),
+       y=paste("PC2 (", round(lsarp.mpx.qc.cog.log.pca.var[2], digits=1), "%)", sep=""))+
+  facet_wrap(~"PCA of QC samples (COG)")
+
+# concerningly high variancein #.2
+# will need to check that plate is not sig associated with proteomes
 
 # :: MPX KEGG PATHWAY --------------------------------------------------------------
 
@@ -1898,6 +2029,18 @@ metadata.lsarp.stool.asv$phase = ifelse(metadata.lsarp.stool.asv$standard.name =
 metadata.lsarp.stool = distinct(metadata.lsarp.stool)
 metadata.lsarp.stool.asv = distinct(metadata.lsarp.stool.asv)
 
+# add MPX plate
+metadata.lsarp.stool = metadata.lsarp.stool %>%
+  merge(subset(lsarp.mpx.map.plates, standard.name %in% metadata.lsarp.stool$standard.name),
+        by="standard.name", all.x=T)
+metadata.lsarp.stool$plate = as.factor(metadata.lsarp.stool$plate)
+
+metadata.lsarp.stool.asv = metadata.lsarp.stool.asv %>%
+  merge(subset(lsarp.mpx.map.plates, standard.name %in% metadata.lsarp.stool.asv$standard.name),
+        by="standard.name", all.x=T)
+metadata.lsarp.stool.asv$plate = as.factor(metadata.lsarp.stool.asv$plate)
+
+
 # save these, load into analysis script
 save(
   # 16S data
@@ -1916,6 +2059,7 @@ save(
   lsarp.cd.mpx.kegg.mat,
   lsarp.cd.mpx.cog.mat,
   lsarp.cd.mpx.cazy.mat,
+  lsarp.mpx.map.plates, # mpx plate data to add in analysis file
   # MBX data
   lsarp.mbx.raw.mat,
   lsarp.mbx.annotated.mat,

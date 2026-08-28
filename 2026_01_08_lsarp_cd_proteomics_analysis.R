@@ -23,10 +23,10 @@
 
 # :: save -----------------------------------------------------------------
 
-v.date = "2026_01_08"
-# save.image("./2025_12_04_lsarp_mpx_asv_analysis.Renv")
+v.date = "2026_03_04"
+# save.image("./2026_03_04_lsarp_big_save.Renv")
 
-# load("./2025_12_04_lsarp_mpx_asv_analysis.Renv")
+# load("./2026_03_04_lsarp_big_save.Renv")
 
 # :: load packages --------------------------------------------------------
 
@@ -38,7 +38,7 @@ library("dplyr"); library("ggplot2")
 setwd("~/Documents/PhD/git_oars_archfolder")
 
 # load processed R objects
-load(file = "./2025_12_02_lsarp_16s_data_meta.Renv")
+# load(file = "./2025_12_02_lsarp_16s_data_meta.Renv")
 
 # :: functions ------------------------------------------------------------
 
@@ -174,6 +174,7 @@ proteomics.subset # subset data
 # :: load data ------------------------------------------------------------
 
 proteomics.data.raw = read.csv("./host_proteomics/biopsy_report_proteinGroups_allsamples.csv", sep=",")
+colnames(proteomics.data.raw) # no QCs
 
 # replace names on feature table
 colnames(proteomics.data.raw)[-c(1:5)]  = proteomics.metadata[match(colnames(proteomics.data.raw)[-c(1:5)] , proteomics.metadata$sample),]$code
@@ -233,14 +234,17 @@ proteomics.gene.map %>% arrange(protein)
 
 # reduce to samples to keep (based on full data or subset)
 # note: samples have already been pruned to those non-compliant / early flared / appendicitis
-proteomics.data = proteomics.data[rownames(proteomics.data) %in% proteomics.metadata$code,]
+proteomics.data.raw = proteomics.data[rownames(proteomics.data) %in% proteomics.metadata$code,]
 
 # filter proteins by 80% prevalence + abundance
-dim(proteomics.data) # 7,484 proteins
-proteins.to.keep = proteomics.data
+dim(proteomics.data.raw) # 7,484 proteins
+proteins.to.keep = proteomics.data.raw
 proteins.to.keep[proteins.to.keep != 0] <- 1
 proteins.to.keep = colnames(proteins.to.keep[,colSums(proteins.to.keep) > nrow(proteins.to.keep)*0.8])
 length(proteins.to.keep) # 4,813 proteins present > 80% of samples
+
+proteomics.data = proteomics.data.raw[,colnames(proteomics.data.raw) %in% proteins.to.keep]
+dim(proteomics.data) # 4,813 proteins, 177 samples
 
 # ensure only T0 and T1 are kept
 proteomics.data = proteomics.data[rownames(proteomics.data) %in% subset(proteomics.metadata, Time %in% c(0,1))$code,]
@@ -274,7 +278,11 @@ proteomics.gene.map
 
 # BiocManager::install("biomaRt")
 
-ensembl <- biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+ensembl <- biomaRt::useMart("ensembl", 
+                            dataset = "hsapiens_gene_ensembl",
+                            verbose = T)
+# version 0.7
+
 go_annotations <- biomaRt::getBM(
   attributes = c("hgnc_symbol",          # Gene name (input)
                  "go_id",                # GO term ID
@@ -288,6 +296,8 @@ go_annotations <- biomaRt::getBM(
 
 # clean up
 go_annotations
+
+saveRDS(go_annotations, "./2026_03_03_go_annotations.Rds")
 
 length(unique(go_annotations$hgnc_symbol)) # 6849 annotated, expressed genes
 
@@ -318,6 +328,7 @@ proteomics.mito.map = merge(proteomics.gene.map,
          mito2 = ifelse(gene %in% go_mitochondria_annotations$hgnc_symbol, "mito", ""))
 # note that feature names (in feature table) are proteins, not genes
 
+# save these, because biomart is unreliable (transitioning servers?)
 
 # >>> 1. MPX ------------------------------------------------------------------
 
@@ -406,6 +417,8 @@ table(proteomics.metadata[,c("HM", "Time")])
 # Unfortunately, their "outlier map" method is opaque
 # So we'll use 95% confidence interval
 
+dim(proteomics.data)
+
 # remove 0 var proteins
 proteomics.data = proteomics.data[,apply(proteomics.data, 2, sd)>0]
 # remove non-patient samples // already done
@@ -468,7 +481,7 @@ ggplot(proteomics.pca.df,
   facet_wrap(~Location)
 
 table(proteomics.pca.df$outlier)
-# 4 outliers
+# 9 outliers
 
 # :: PCA -------------------------------------------------------
 
@@ -546,6 +559,24 @@ proteomics.clean.pca.permanova.plot = ggplot(proteomics.clean.pca.permanova %>%
   labs(x="", y="")
 proteomics.clean.pca.permanova.plot
 
+# make a plot, not a table
+proteomics.clean.pca.permanova.r2.plot = proteomics.clean.pca.permanova %>%
+  reshape2::acast(Variable ~ variable, value.var="value") %>% data.frame() %>%
+  mutate(`𝘱 value` = `Pr..F.`) %>%
+  mutate(FDR = p.adjust(`𝘱 value`, method="bonferroni")) %>%
+  mutate(sig = ifelse(`FDR` < 0.05, "***",
+                      ifelse(`FDR` < 0.20, "*",
+                      ifelse(`𝘱 value` < 0.05, "+", NA)))) %>%
+  tibble::rownames_to_column("Variable") %>%
+  mutate(Variable = factor(Variable, levels=c("Time:Group", "Status", "Location"))) %>%
+  ggplot(aes(x=R2, y=Variable))+
+  geom_bar(stat="identity", color="white", fill="black", width=0.5)+
+ # scale_color_manual(values=c("*" = "grey", "***" = "black"))+
+  geom_text(aes(x=R2+0.015, label=sig, vjust=ifelse(sig == "+", 1, 0.8)), size=6)+
+  scale_x_continuous(limits=c(0,0.2))+
+  theme_classic()+
+  labs(x=expression(R^2), y=NULL)+
+  theme(panel.grid.major.x = element_line(color="grey", linewidth=0.2, linetype=2))
 
 # "When controlling for inflammation (and region),
 # RS has no impact on host proteome"
@@ -612,6 +643,25 @@ proteomics.clean.pca.permanova.resp.plot = ggplot(proteomics.clean.pca.resp.perm
   labs(x="", y="")
 proteomics.clean.pca.permanova.resp.plot
 
+# make plot, not table
+proteomics.clean.pca.permanova.resp.r2.plot = proteomics.clean.pca.resp.permanova %>%
+  mutate(Variable = gsub("Time:flare.group", "Time:Response", Variable))%>%
+  reshape2::acast(Variable ~ variable, value.var="value") %>% data.frame() %>%
+  mutate(`𝘱 value` = `Pr..F.`) %>%
+  mutate(FDR = p.adjust(`𝘱 value`, method="bonferroni")) %>%
+  mutate(sig = ifelse(`FDR` < 0.05, "***",
+                      ifelse(`FDR` < 0.20, "*",
+                             ifelse(`𝘱 value` < 0.05, "+", NA)))) %>%
+  tibble::rownames_to_column("Variable") %>%
+  mutate(Variable = factor(Variable, levels=c("Time:Response", "Status", "Location"))) %>%
+  ggplot(aes(x=R2, y=Variable))+
+  geom_bar(stat="identity", color="white", fill="black", width=0.5)+
+  # scale_color_manual(values=c("*" = "grey", "***" = "black"))+
+  geom_text(aes(x=R2+0.015, label=sig, vjust=ifelse(sig == "+", 1, 0.8)), size=6)+
+  scale_x_continuous(limits=c(0,0.2))+
+  theme_classic()+
+  labs(x=expression(R^2), y=NULL)+
+  theme(panel.grid.major.x = element_line(color="grey", linewidth=0.2, linetype=2))
 
 # Among RS treated patients, there is still no significant difference in host proteome
 # when controlling for inflammation status
@@ -693,9 +743,9 @@ if(rerun==T){
         metadata.subset$Status = factor(metadata.subset$Status, levels=c("N", "A"))
         metadata.subset$Location = factor(metadata.subset$Location, levels=c("TI", "PC", "DC"))
         metadata.subset$Time = factor(metadata.subset$Time, levels=c("0", "1"))
-        #metadata.subset$Plate = as.factor(metadata.subset$Plate) # likely overfits
+        metadata.subset$Plate = as.factor(metadata.subset$Plate) # likely overfits
         
-        lmer.results = lmerTest::lmer(protein ~ Group*Time + Location + Status + (1|study_id), metadata.subset) %>% summary() %>% coef() %>% data.frame()
+        lmer.results = lmerTest::lmer(protein ~ Group*Time + Location + Status + (1|study_id) + (1|Plate), metadata.subset) %>% summary() %>% coef() %>% data.frame()
         # extract data
         data.frame(
           location = location,
@@ -733,8 +783,8 @@ proteomics.data.group.interaction.lm.mito %>% arrange(padj)
 subset(proteomics.data.group.interaction.lm.mito, !is.na(proteomics.data.group.interaction.lm.mito))$protein %>% unique() %>% length()
 
 subset(proteomics.data.group.interaction.lm.mito, pval < 0.05)$protein %>% unique() %>% length()
-subset(proteomics.data.group.interaction.lm.mito, pval < 0.05 & coef > 0)$protein %>% unique() %>% length() # 107 up
-subset(proteomics.data.group.interaction.lm.mito, pval < 0.05 & coef < 0)$protein %>% unique() %>% length() # 60 down
+subset(proteomics.data.group.interaction.lm.mito, pval < 0.05 & coef > 0)$protein %>% unique() %>% length() # 56 up
+subset(proteomics.data.group.interaction.lm.mito, pval < 0.05 & coef < 0)$protein %>% unique() %>% length() # 118 down
 
 # :: MPX Volcano ----------------------------------------------------------
 
@@ -759,10 +809,36 @@ proteomics.data.group.interaction.lm.mito.volcano = ggplot(proteomics.data.group
                           color="black"))+
   facet_wrap(~"Associations with Treatment Group")+
   labs(x="Interaction Coefficient",
-       y="p value")
+       y="𝘱 value")
 proteomics.data.group.interaction.lm.mito.volcano
 
 # no proteins with FDR-adjusted p value < 0.20 (or even 0.80)
+
+# treatment - decreased: 
+# PFKAL = ATP-dependent 6-phosphofructokinase
+# TBB3 = tubulin; cytoskeleton
+# F6XY72 = nucleoside-disphosphate kinase; phosphate transfer
+# ACOX1 = acyl-CoA oxidase; very LCFA oxidation
+# S2512 = SLC25A12; malate-aspartate NADH shuttle; mitochondrial
+# PSDE = proteosome
+# MYOM1 = muscle structure
+# FABP5 = fatty acid binding
+# ATPO = mitochondrial
+# ELAF = serine protease inhibitor; targets neutrophil elastase
+# IF5A1 = translation initiation factor
+# C1QBP = mitochondrial regulator
+# PGM1 = phosphoglucomutase 1; glucose metabolism
+# DX39B = spliceosome
+# ETFB = electron transfer
+# SUCB2 = succinate-CoA ligase; TCA cycle
+
+subset(proteomics.data.group.interaction.lm.mito, protein == "SUCB2")
+# S2512 = not present
+# ATPO = decreased (consistent)
+# C1QBP = increased (different)
+# ETFB = increased (different)
+# SUCB2 = increased (different)
+
 
 # :: MPX: Mito Enrich -----------------------------------------------------
 
@@ -770,8 +846,8 @@ subset(proteomics.data.group.interaction.lm.mito, pval < 0.05)[,c("protein", "co
   mutate(direction = sign(coef)+2) %>%
   dplyr::select(direction, mito) %>% table()%>%
   fisher.test()
-# p-value = 1
-# OR = 0.98
+# p-value = 0.5885
+# OR = 0.68
 # not sig with GO mito either
 subset(proteomics.data.group.interaction.lm.mito, pval < 0.05)[,c("protein", "coef", "pval", "mito", "mito2")] %>% distinct() %>%
   mutate(direction = sign(coef)+2) %>%
@@ -795,11 +871,11 @@ proteomics.data.group.interaction.lm.mito.plot = proteomics.data.group.interacti
            color="black")+
   #geom_point(shape=21, aes(size=perc), fill="white")+
   #geom_point(shape=21, aes(size=perc), alpha=0.6)+
-  geom_text(data=subset(proteomics.data.group.interaction.lm.mito.data, mito == "Mitochondrial"),
+  geom_label(data=subset(proteomics.data.group.interaction.lm.mito.data, mito == "Mitochondrial"),
             aes(
               x=direction, y = .97*100,
               label = paste(round(perc, digits=2)*100, "%", sep="")), 
-            color="white", size=3)+
+            color="black", fill="white", size=4)+
   #scale_fill_manual(values=c("Depleted" = "blue", "Enriched" = "red"))+
   scale_fill_manual(values=c("Mitochondrial" = "red", "Other" = "white"))+
   theme_minimal()+
@@ -836,8 +912,8 @@ mito.enrich.sens.group.plot = mito.enrich.sens.group %>%
   theme_classic()+
   facet_wrap(~"Group ~ MitoCarta3.0")+
   theme(strip.text = element_text(size=10))+
-  labs(x="Threshold for Significance (raw p value)",
-       y="Enrichment p value")
+  labs(x="Threshold for Significance (raw 𝘱 value)",
+       y="Enrichment 𝘱 value")
 
 # B) GO sensitivity
 
@@ -859,14 +935,13 @@ mito2.enrich.sens.group.plot = mito2.enrich.sens.group %>%
   theme_classic()+
   facet_wrap(~"Group ~ GO")+
   theme(strip.text = element_text(size=10))+
-  labs(x="Threshold for Significance (raw p value)",
-       y="Enrichment p value")
+  labs(x="Threshold for Significance (raw 𝘱 value)",
+       y="Enrichment 𝘱 value")
 
 mito.enrich.sens.group.plot+
 mito2.enrich.sens.group.plot
 
-# somewhat sensitive to p value thresholds,
-# but nonsignificant across lower p vals
+# robust to p values
 
 
 # :: __ oxphos sensitivity ----------------------------------------------------------
@@ -874,8 +949,8 @@ mito2.enrich.sens.group.plot
 # goal: see if oxphos is also enriched
 unique(proteomics.data.group.interaction.lm.mito$MitoPathways.Hierarchy)
 
-subset(proteomics.data.group.interaction.lm.mito, pval < 0.05)$protein %>% unique()
-# n = 167 total sig proteins
+subset(proteomics.data.group.interaction.lm.mito, pval < 0.05)$protein %>% unique() $%>% length()
+# n = 174 total sig proteins
 data.frame(subset(proteomics.data.group.interaction.lm.mito, pval < 0.05) %>%
   mutate(oxphos = ifelse(grepl("OXPHOS", MitoPathways.Hierarchy), "oxphos", "")))[,c("protein", "coef", "pval", "oxphos")] %>% distinct() %>%
   # need to delete duplicated genes
@@ -884,14 +959,14 @@ data.frame(subset(proteomics.data.group.interaction.lm.mito, pval < 0.05) %>%
   mutate(direction = sign(coef)+2) %>%
   dplyr::select(direction, oxphos) %>% table() %>%
   fisher.test()
-# sig depleted by RS
+# not sig; OR 0, p = 0.3066
 
 
 # what's happening?
 data.frame(subset(proteomics.data.group.interaction.lm.mito, pval < 0.05) %>%
              mutate(oxphos = ifelse(grepl("OXPHOS", MitoPathways.Hierarchy), "oxphos", "")))[,c("protein", "coef", "pval", "oxphos")] %>% distinct() %>%
   subset(oxphos=="oxphos")
-# oxphos proteins are ONLY decreased in RS-treated (n=3 proteins)
+# oxphos proteins are ONLY decreased in RS-treated (n=4 proteins)
 
 # :: MPX: Heatmap ---------------------------------------------------------
 
@@ -977,9 +1052,9 @@ if(rerun==T){
         metadata.subset$Location = factor(metadata.subset$Location, levels=c("TI", "PC", "DC"))
         metadata.subset$flare.group = factor(metadata.subset$flare.group, levels=c("Relapse", "Remit"))
         metadata.subset$Time = factor(metadata.subset$Time, levels=c("0", "1"))
-        #metadata.subset$Plate = as.factor(metadata.subset$Plate)
+        metadata.subset$Plate = as.factor(metadata.subset$Plate)
         
-        lmer.results = lmerTest::lmer(protein ~ flare.group*Time + Location + Status + (1|study_id), metadata.subset) %>% summary() %>% coef() %>% data.frame()
+        lmer.results = lmerTest::lmer(protein ~ flare.group*Time + Location + Status + (1|study_id) + (1|Plate), metadata.subset) %>% summary() %>% coef() %>% data.frame()
         # extract data
         data.frame(
           location = location,
@@ -1045,7 +1120,7 @@ proteomics.data.group.interaction.resp.lm.mito.volcano = ggplot(proteomics.data.
                           color="black"))+
   facet_wrap(~"Associations with Therapy Response")+
   labs(x="Interaction Coefficient",
-       y="p value")
+       y="𝘱 value")
 proteomics.data.group.interaction.resp.lm.mito.volcano
 
 # no longer < 0.20
@@ -1057,13 +1132,12 @@ proteomics.data.group.interaction.resp.lm.mito %>%
   arrange(pval)
 
 # MCT1 ?
-subset(proteomics.data.group.interaction.resp.lm.mito, gene == "SLC16A1") # p = 0.08
+subset(proteomics.data.group.interaction.resp.lm.mito, gene == "SLC16A1") # p = 0.02
 
 # H2S detox?
-subset(proteomics.data.group.interaction.resp.lm.mito, grepl("SQR", gene)) # p = 0.09 (increased)
-subset(proteomics.data.group.interaction.resp.lm.mito, grepl("ETHE", gene)) # p = 0.78
-subset(proteomics.data.group.interaction.resp.lm.mito, grepl("TST", gene)) # TSTD1 p = 0.06 (reduced)
-#subset(proteomics.data.group.interaction.resp.lm.mito, grepl("hcox", gene)) # TSTD1 p = 0.06 (reduced)
+subset(proteomics.data.group.interaction.resp.lm.mito, grepl("SQR", gene)) # p = 0.04 (increased)
+subset(proteomics.data.group.interaction.resp.lm.mito, grepl("ETHE", gene)) # p = 0.98
+subset(proteomics.data.group.interaction.resp.lm.mito, grepl("TST", gene)) # TSTD1 p = 0.25 (reduced)
 
 
 # "underpowered, but shows a trend towards increased oxidative phosphorylation and reduced inflammation"
@@ -1090,8 +1164,8 @@ subset(proteomics.resp.mito.other, pval < 0.05)[,c("protein", "coef", "pval", "m
   dplyr::select(direction, mito) %>% table() %>%
   fisher.test()
 # significantly enriched for mitochondrial genes
-# p-value = 1.681e-07
-# OR = 7.618048
+# p-value = 3.661e-07
+# OR = 7.05
 # same! good
 
 # CHECK GO MITO (also sig)
@@ -1108,8 +1182,8 @@ subset(proteomics.resp.mito.other2, pval < 0.05)[,c("protein", "coef", "pval", "
   dplyr::select(direction, mito2) %>% table() %>%
   fisher.test()
 # significantly enriched for mitochondrial genes
-# p-value = 1.231e-07
-# OR = 6.643642
+# p-value = 1.43e-07
+# OR = 6.33
 # similar! good
 
 
@@ -1138,8 +1212,8 @@ mito.enrich.sens.resp.plot = mito.enrich.sens.resp %>%
   theme_classic()+
   facet_wrap(~"Responders ~ MitoCarta3.0")+
   theme(strip.text = element_text(size=10))+
-  labs(x="Threshold for Significance (raw p value)",
-       y="Enrichment p value")
+  labs(x="Threshold for Significance (raw 𝘱 value)",
+       y="Enrichment 𝘱 value")
 
 # B) GO sensitivity
 mito2.enrich.sens.resp = do.call(rbind, lapply(seq(from=0.01, to=0.25, by=0.01), function(x){
@@ -1159,8 +1233,8 @@ mito2.enrich.sens.resp.plot = mito2.enrich.sens.resp %>%
   theme_classic()+
   facet_wrap(~"Responders ~ GO")+
   theme(strip.text = element_text(size=10))+
-  labs(x="Threshold for Significance (raw p value)",
-       y="Enrichment p value")
+  labs(x="Threshold for Significance (raw 𝘱 value)",
+       y="Enrichment 𝘱 value")
 
 mito.enrich.sens.resp.plot+
   mito2.enrich.sens.resp.plot
@@ -1183,14 +1257,14 @@ proteomics.mito.gene.enrichment.plot =proteomics.mito.gene.enrichment.data%>%
            color="black")+
   #geom_point(shape=21, aes(size=perc), fill="white")+
   #geom_point(shape=21, aes(size=perc), alpha=0.6)+
-  geom_text(data=subset(proteomics.mito.gene.enrichment.data, mito == "Mitochondrial" & direction == "Downregulated"),
+  geom_label(data=subset(proteomics.mito.gene.enrichment.data, mito == "Mitochondrial" & direction == "Downregulated"),
             aes(x=direction, y = .97*100,
               label = paste(round(perc, digits=2)*100, "%", sep="")), 
-            color="white", size=3)+
-  geom_text(data=subset(proteomics.mito.gene.enrichment.data, mito == "Mitochondrial" & direction == "Upregulated"),
+            color="black",fill="white",size=4)+
+  geom_label(data=subset(proteomics.mito.gene.enrichment.data, mito == "Mitochondrial" & direction == "Upregulated"),
             aes(x=direction, y = .9*100,
                 label = paste(round(perc, digits=2)*100, "%", sep="")), 
-            color="white", size=5)+
+            color="black",fill="white", size=5)+
   
   #scale_fill_manual(values=c("Depleted" = "blue", "Enriched" = "red"))+
   scale_fill_manual(values=c("Mitochondrial" = "red", "Other" = "white"))+
@@ -1222,7 +1296,7 @@ data.frame(subset(proteomics.data.group.interaction.resp.lm.mito, pval < 0.05) %
 data.frame(subset(proteomics.data.group.interaction.resp.lm.mito, pval < 0.05) %>%
              mutate(oxphos = ifelse(grepl("OXPHOS", MitoPathways.Hierarchy), "oxphos", "")))[,c("protein", "coef", "pval", "oxphos")] %>% distinct() %>%
   subset(oxphos=="oxphos")
-# oxphos proteins are ONLY increased in responders (n=9 proteins)
+# oxphos proteins are ONLY increased in responders (n=8 proteins)
 
 # :: MPX: Heatmap ---------------------------------------------------------
 
@@ -1400,9 +1474,9 @@ proteomics.data.placebo.interaction.resp.lm.mito.volcano = ggplot(proteomics.dat
                         strip.text = element_text(size=10),
                         strip.background = element_rect(
                           color="black"))+
-  facet_wrap(~"Associations with Clinical Response")+
+  facet_wrap(~"Associations with Therapy Response")+
   labs(x="Interaction Coefficient",
-       y="p value")
+       y="𝘱 value")
 proteomics.data.placebo.interaction.resp.lm.mito.volcano
 
 
@@ -1504,7 +1578,7 @@ mito.enrich.sens.resp.placebo.plot = mito.enrich.sens.resp.placebo %>%
   facet_wrap(~"Responders ~ MitoCarta3.0 (Placebo)")+
   theme(strip.text = element_text(size=10))+
   labs(x="Threshold for Significance (raw p value)",
-       y="Enrichment p value")
+       y="Enrichment 𝘱 value")
 
 # B) GO sensitivity
 mito2.enrich.sens.resp.placebo = do.call(rbind, lapply(seq(from=0.05, to=0.25, by=0.01), function(x){
@@ -1525,7 +1599,7 @@ mito2.enrich.sens.resp.placebo.plot = mito2.enrich.sens.resp.placebo %>%
   facet_wrap(~"Responders ~ GO (Placebo)")+
   theme(strip.text = element_text(size=10))+
   labs(x="Threshold for Significance (raw p value)",
-       y="Enrichment p value")
+       y="Enrichment 𝘱 value")
 
 mito.enrich.sens.resp.placebo.plot+
   mito2.enrich.sens.resp.placebo.plot
@@ -1851,6 +1925,25 @@ lsarp.mli.ps.permanova.plot = ggplot(lsarp.mli.ps.permanova %>%
 lsarp.mli.ps.permanova.plot
 
 
+# make a plot, not a table
+lsarp.mli.ps.permanova.r2.plot = lsarp.mli.ps.permanova %>%
+  reshape2::acast(Variable ~ variable, value.var="value") %>% data.frame() %>%
+  mutate(`𝘱 value` = `Pr..F.`) %>%
+  mutate(FDR = p.adjust(`𝘱 value`, method="bonferroni")) %>%
+  mutate(sig = ifelse(`FDR` < 0.05, "***",
+                      ifelse(`FDR` < 0.20, "*",
+                             ifelse(`𝘱 value` < 0.05, "+", NA)))) %>%
+  tibble::rownames_to_column("Variable") %>%
+  mutate(Variable = factor(Variable, levels=c("Time:Group", "Status", "Location"))) %>%
+  ggplot(aes(x=R2, y=Variable))+
+  geom_bar(stat="identity", color="white", fill="black", width=0.5)+
+  # scale_color_manual(values=c("*" = "grey", "***" = "black"))+
+  geom_text(aes(x=R2+0.015, label=sig, vjust=ifelse(sig == "+", 1, 0.8)), size=6)+
+  scale_x_continuous(limits=c(0,0.2))+
+  theme_classic()+
+  labs(x=expression(R^2), y=NULL)+
+  theme(panel.grid.major.x = element_line(color="grey", linewidth=0.2, linetype=2))
+
 # check status
 lsarp.mli.ps.pcoa.plot = ggplot(lsarp.mli.ps.pcoa.df %>% mutate(Location = factor(Location, levels=c("TI", "PC", "DC"))),
        aes(x=Axis.1, y=Axis.2))+
@@ -1882,6 +1975,7 @@ lsarp.mli.ps.pcoa.df = merge(lsarp.mli.ps.pcoa.df,
 # redraw Bray-Curtis
 
 # calculate Bray-Curtis dissimilarities
+dim(lsarp.mli.ps.mat) # 509 taxa; 124 samples
 lsarp.mli.ps.bray.resp = vegan::vegdist(lsarp.mli.ps.mat[grepl(paste(c(subset(lsarp.metadata.responders, Group == "RS")$HM), collapse="|"), rownames(lsarp.mli.ps.mat)),])
 # perform PCoA
 lsarp.mli.ps.pcoa.resp = ape::pcoa(lsarp.mli.ps.bray.resp)
@@ -1935,6 +2029,28 @@ lsarp.mli.ps.resp.permanova.plot = ggplot(lsarp.mli.ps.resp.permanova %>%
                         panel.grid.major=element_blank())+
   labs(x="", y="")
 lsarp.mli.ps.resp.permanova.plot
+
+
+# make a plot, not a table
+lsarp.mli.ps.resp.permanova.r2.plot = lsarp.mli.ps.resp.permanova %>%
+  mutate(Variable = gsub("Time:flare.group", "Time:Response", Variable))%>%
+  reshape2::acast(Variable ~ variable, value.var="value") %>% data.frame() %>%
+  mutate(`𝘱 value` = `Pr..F.`) %>%
+  mutate(FDR = p.adjust(`𝘱 value`, method="bonferroni")) %>%
+  mutate(sig = ifelse(`FDR` < 0.05, "***",
+                      ifelse(`FDR` < 0.20, "*",
+                             ifelse(`𝘱 value` < 0.05, "+", NA)))) %>%
+  tibble::rownames_to_column("Variable") %>%
+  mutate(Variable = factor(Variable, levels=c("Time:Response", "Status", "Location"))) %>%
+  ggplot(aes(x=R2, y=Variable))+
+  geom_bar(stat="identity", color="white", fill="black", width=0.5)+
+  # scale_color_manual(values=c("*" = "grey", "***" = "black"))+
+  geom_text(aes(x=R2+0.015, label=sig, vjust=ifelse(sig == "+", 1, 0.8)), size=6)+
+  scale_x_continuous(limits=c(0,0.2))+
+  theme_classic()+
+  labs(x=expression(R^2), y=NULL)+
+  theme(panel.grid.major.x = element_line(color="grey", linewidth=0.2, linetype=2))
+
 
 # check status
 lsarp.mli.ps.pcoa.resp.plot = ggplot(lsarp.mli.ps.pcoa.resp.df %>% mutate(Location = factor(Location, levels=c("TI", "PC", "DC"))),
@@ -2113,10 +2229,10 @@ mli.butyrogen.i.enrichment.plot = mli.butyrogen.i.enrichment.data %>%
            color="black")+
   #geom_point(shape=21, aes(size=perc), fill="white")+
   #geom_point(shape=21, aes(size=perc), alpha=0.6)+
-  geom_text(data=subset(mli.butyrogen.i.enrichment.data, butyrogen.i == "Butyrogen"),
+  geom_label(data=subset(mli.butyrogen.i.enrichment.data, butyrogen.i == "Butyrogen"),
             aes(
     x=direction, y = .90*100,
-    label = paste(round(perc, digits=2)*100, "%", sep="")), color="white", size=5)+
+    label = paste(round(perc, digits=2)*100, "%", sep="")), color="black",fill="white", size=5)+
   #scale_fill_manual(values=c("Depleted" = "blue", "Enriched" = "red"))+
   scale_fill_manual(values=c("Butyrogen" = "red", "Other" = "white"))+
   # scale_size_continuous(range=c(20,60))+
@@ -2152,8 +2268,8 @@ but.enrich.sens.group.plot = but.enrich.sens.group %>%
   theme_classic()+
   facet_wrap(~"Group ~ Butyrogens")+
   theme(strip.text = element_text(size=10))+
-  labs(x="Threshold for Significance (adj p value)",
-       y="Enrichment p value")
+  labs(x="Threshold for Significance (adj 𝘱 value)",
+       y="Enrichment 𝘱 value")
 
 
 # :: ASV: Heatmap ---------------------------------------------------------
@@ -2244,10 +2360,10 @@ mli.butyrogen.ii.enrichment.plot = mli.butyrogen.ii.enrichment.data %>%
            color="black")+
   #geom_point(shape=21, aes(size=perc), fill="white")+
   #geom_point(shape=21, aes(size=perc), alpha=0.6)+
-  geom_text(data=subset(mli.butyrogen.ii.enrichment.data, butyrogen.ii == "Butyrogen"),
+  geom_label(data=subset(mli.butyrogen.ii.enrichment.data, butyrogen.ii == "Butyrogen"),
             aes(
               x=direction, y = .90*100,
-              label = paste(round(perc, digits=2)*100, "%", sep="")), color="white", size=5)+
+              label = paste(round(perc, digits=2)*100, "%", sep="")), color="black", size=5)+
   #scale_fill_manual(values=c("Depleted" = "blue", "Enriched" = "red"))+
   scale_fill_manual(values=c("Butyrogen" = "red", "Other" = "white"))+
   # scale_size_continuous(range=c(20,60))+
@@ -2428,10 +2544,10 @@ mli.resp.butyrogen.i.enrichment.plot = mli.resp.butyrogen.i.enrichment.data %>%
            color="black")+
   #geom_point(shape=21, aes(size=perc), fill="white")+
   #geom_point(shape=21, aes(size=perc), alpha=0.6)+
-  geom_text(data=subset(mli.resp.butyrogen.i.enrichment.data, butyrogen.i == "Butyrogen"),
+  geom_label(data=subset(mli.resp.butyrogen.i.enrichment.data, butyrogen.i == "Butyrogen"),
             aes(
               x=direction, y = .90*100,
-              label = paste(round(perc, digits=2)*100, "%", sep="")), color="white", size=5)+
+              label = paste(round(perc, digits=2)*100, "%", sep="")), color="black",fill="white", size=5)+
   #scale_fill_manual(values=c("Depleted" = "blue", "Enriched" = "red"))+
   scale_fill_manual(values=c("Butyrogen" = "red", "Other" = "white"))+
   # scale_size_continuous(range=c(20,60))+
@@ -2520,8 +2636,8 @@ but.enrich.sens.resp.plot = but.enrich.sens.resp %>%
   theme_classic()+
   facet_wrap(~"Responders ~ Butyrogens")+
   theme(strip.text = element_text(size=10))+
-  labs(x="Threshold for Significance (adj p value)",
-       y="Enrichment p value")
+  labs(x="Threshold for Significance (raw 𝘱 value)",
+       y="Enrichment 𝘱 value")
 
 but.enrich.sens.group.plot+
 but.enrich.sens.resp.plot
@@ -2565,10 +2681,10 @@ mli.resp.butyrogen.ii.enrichment.plot = mli.resp.butyrogen.ii.enrichment.data %>
            color="black")+
   #geom_point(shape=21, aes(size=perc), fill="white")+
   #geom_point(shape=21, aes(size=perc), alpha=0.6)+
-  geom_text(data=subset(mli.resp.butyrogen.ii.enrichment.data, butyrogen.ii == "Butyrogen"),
+  geom_label(data=subset(mli.resp.butyrogen.ii.enrichment.data, butyrogen.ii == "Butyrogen"),
             aes(
               x=direction, y = .90*100,
-              label = paste(round(perc, digits=2)*100, "%", sep="")), color="white", size=5)+
+              label = paste(round(perc, digits=2)*100, "%", sep="")), color="black",fill="white", size=5)+
   #scale_fill_manual(values=c("Depleted" = "blue", "Enriched" = "red"))+
   scale_fill_manual(values=c("Butyrogen" = "red", "Other" = "white"))+
   # scale_size_continuous(range=c(20,60))+
@@ -2762,8 +2878,8 @@ but.enrich.sens.resp.placebo.plot = but.enrich.sens.resp.placebo %>%
   theme_classic()+
   facet_wrap(~"Responders ~ Butyrogens (Placebo)")+
   theme(strip.text = element_text(size=10))+
-  labs(x="Threshold for Significance (adj p value)",
-       y="Enrichment p value")
+  labs(x="Threshold for Significance (raw 𝘱 value)",
+       y="Enrichment 𝘱 value")
 
 but.enrich.sens.resp.placebo.plot
 
@@ -2806,12 +2922,18 @@ protein.sig.protein = subset(proteomics.data.group.interaction.resp.lm.mito, pva
 proteomics.data.clean.sig = proteomics.data.clean[,colnames(proteomics.data.clean) %in%
                                                 protein.sig.protein]
 dim(proteomics.data.clean.sig)
+# 265
 
 # subset to sig asv (resp/nonresp comparisons)
 asv.sig.asv = subset(asv.data.group.rs.interaction.lm, padj < 0.20)$OTU
 asv.data.clean = lsarp.mli.ps.mat[,colnames(lsarp.mli.ps.mat) %in%
                                     asv.sig.asv]
 dim(asv.data.clean)
+# 109 ASVs
+
+# how many total correlations calculated?
+265 * 109
+# 28,885
 
 
 # :: regress out covar ----------------------------------------------------
@@ -2820,40 +2942,120 @@ dim(asv.data.clean)
 
 # proteomics:
 proteomics.data.regressed = do.call(cbind, lapply(1:ncol(proteomics.data.clean.sig), function(x){
+  print(x)
   data.subset = data.frame(protein = proteomics.data.clean.sig[,x]) %>%
     mutate(sample = rownames(.)) %>%
-    tidyr::separate(sample, into=c("HM", "Time", "Location", "Status"))
-  lm.resid = resid(lm(log2(protein+proteomics.pseudo) ~ 1 + HM + Time + Location + Status,
-                      data.subset))
-  new.data = data.frame(protein = lm.resid)
+    tidyr::separate(sample, into=c("HM", "Time", "Location", "Status"), remove=F)%>%
+    mutate(code = sample)
+  # remove plate effects
+  data.subset = merge(data.subset, proteomics.metadata[,c("code", "Plate")], by="code")%>%
+    mutate(plate = as.factor(Plate))
+  # remove 0
+  data.subset.no0 = subset(data.subset, protein != 0)
+  #
+  lm.model = lmerTest::lmer(log2(protein) ~ 1 + Time + Location + Status + (1|HM) + (1|plate),
+                            data.subset.no0)
+  # use model to predict residuals of full data (keeping order intact and preserving 0 as NA)
+  new.data = data.frame(resid = log2(data.subset$protein) - predict(lm.model, data.subset %>% mutate(protein = log2(protein))))
+  new.data[new.data == "-Inf"] = NA
   colnames(new.data) = colnames(proteomics.data.clean.sig)[x]
   rownames(new.data) = rownames(proteomics.data.clean.sig)
   new.data
 }))
 
+# confirm good quality (randomly select 9 features)
+
+do.call(rbind, lapply(1:9, function(x){
+  set.seed(x)
+  x = sample(1:ncol(proteomics.data.clean.sig), size = 1)
+  data.subset = data.frame(protein = proteomics.data.clean.sig[,x]) %>%
+    mutate(sample = rownames(.)) %>%
+    tidyr::separate(sample, into=c("HM", "Time", "Location", "Status"), remove=F)%>%
+    mutate(code = sample)
+  # remove plate effects
+  data.subset = merge(data.subset, proteomics.metadata[,c("code", "Plate")], by="code")%>%
+    mutate(plate = as.factor(Plate))
+  # remove 0 counts
+  data.subset = subset(data.subset, protein != 0)
+  # build model
+  lm.resid = lmerTest::lmer(log2(protein) ~ 1 + Time + Location + Status + (1|HM) + (1|plate),
+                            data.subset)
+  # check fit
+  data.frame(resid = resid(lm.resid), 
+             fitted = fitted(lm.resid),
+             # add predict to check that predict will fit data properly
+             pred = predict(lm.resid, data.subset %>% mutate(protein = log2(protein))),
+             pred.resid = log2(data.subset$protein) - predict(lm.resid, data.subset %>% mutate(protein = log2(protein)),
+                                                              allow.new.levels=T),
+             # it's the same
+             feature = colnames(proteomics.data.clean.sig)[x])
+})) %>%
+  ggplot(aes(x=pred.resid, y=pred))+
+  geom_point(shape=21, fill="black", color="white")+
+  theme_classic()+
+  facet_wrap(~feature, scales="free")
+
 # asv
 asv.data.regressed = do.call(cbind, lapply(1:ncol(asv.data.clean), function(x){
-  #print(x)
+  print(x)
+  data.subset = data.frame(asv = asv.data.clean[,x]) %>%
+    mutate(sample = rownames(.)) %>%
+    tidyr::separate(sample, into=c("HM","ASP", "Location"), sep="-") %>%
+    tidyr::separate(HM, into=c("HM", "Time"), sep="\\.") %>%
+    mutate(Time = substr(Time, 2,2)) %>%
+    mutate(sample = paste(HM, Time, Location, sep="_")) %>%
+    mutate(HM = as.factor(HM))
+  # remove 0
+  data.subset.no0 = subset(data.subset, asv != 0)
+  #
+  lm.model = lmerTest::lmer(log2(asv) ~ 1 + Time + Location + (1|HM),
+                            data.subset.no0)
+  # use model to predict residuals of full data (keeping order intact and preserving 0 as NA)
+  new.data = data.frame(resid = log2(data.subset$asv) - predict(lm.model, data.subset %>% mutate(asv = log2(asv)),
+                                                                allow.new.levels=T))
+  new.data[new.data == "-Inf"] = NA
+  colnames(new.data) = colnames(asv.data.clean)[x]
+  rownames(new.data) = data.subset$sample
+  new.data
+}))
+
+# confirm good quality (randomly select 9 features)
+
+do.call(rbind, lapply(1:9, function(x){
+  set.seed(x)
+  x = sample(1:ncol(asv.data.clean), size = 1)
   data.subset = data.frame(asv = asv.data.clean[,x]) %>%
     mutate(sample = rownames(.)) %>%
     tidyr::separate(sample, into=c("HM","ASP", "Location"), sep="-") %>%
     tidyr::separate(HM, into=c("HM", "Time"), sep="\\.") %>%
     mutate(Time = substr(Time, 2,2)) %>%
     mutate(sample = paste(HM, Time, Location, sep="_"))
-  lm.resid = resid(lm(log2(asv+asv.pseudo) ~ 1 + HM + Time + Location,
-                      data.subset))
-  new.data = data.frame(asv = lm.resid)
-  colnames(new.data) = colnames(asv.data.clean)[x]
-  rownames(new.data) = data.subset$sample
-  new.data
-}))
+  # remove 0 counts
+  data.subset = subset(data.subset, asv != 0)
+  # build model
+  lm.resid = (lmerTest::lmer(log2(asv) ~ 1 + Time + Location + (1|HM),
+                                  data.subset))
+  # check fit
+  resid.df = data.frame(resid = resid(lm.resid), 
+             fitted = fitted(lm.resid),
+             feature = colnames(proteomics.data.clean.sig)[x])
+  # remove 0 values; replace with NA
+ # resid.df$resid[asv.data.clean[,x] == (asv.pseudo*2)] = NA
+  # collect data
+  resid.df
+})) %>%
+  ggplot(aes(x=resid, y=fitted))+
+  geom_point(shape=21, fill="black", color="white")+
+  theme_classic()+
+  facet_wrap(~feature, scales="free")
+
 
 # now take mean values per HM, Time, Location
 proteomics.data.regressed.mean = proteomics.data.regressed %>% as.matrix()%>%
   reshape2::melt() %>%
   tidyr::separate(col=Var1, into=c("HM", "Time", "Location", "Status")) %>%
   group_by(HM, Time, Location, Var2) %>%
-  mutate(mean.value = mean(value)) %>%
+  mutate(mean.value = mean(na.omit(value))) %>%
   dplyr::select(HM, Time, Location, Var2, mean.value) %>% distinct() %>% as.data.frame() %>%
   mutate(sample = paste(HM, Time, Location, sep="_")) %>%
   dplyr::select(sample, Var2, mean.value)
@@ -2862,7 +3064,7 @@ asv.data.regressed.mean = asv.data.regressed %>% as.matrix()%>%
   reshape2::melt() %>%
   tidyr::separate(col=Var1, into=c("HM", "Time", "Location")) %>%
   group_by(HM, Time, Location, Var2) %>%
-  mutate(mean.value = mean(value)) %>%
+  mutate(mean.value = mean(na.omit(value))) %>%
   dplyr::select(HM, Time, Location, Var2, mean.value) %>% distinct() %>% as.data.frame() %>%
   mutate(sample = paste(HM, Time, Location, sep="_")) %>%
   dplyr::select(sample, Var2, mean.value)
@@ -2884,19 +3086,46 @@ proteomics.asv.data.regressed.merge =
 rownames(proteomics.asv.data.regressed.merge) = proteomics.asv.data.regressed.merge$sample
 proteomics.asv.data.regressed.merge$sample = NULL
 
+
+grepl("ASV", colnames(proteomics.asv.data.regressed.merge)) %>% sum()
+(!grepl("ASV", colnames(proteomics.asv.data.regressed.merge))) %>% sum()
+
+
+# :: subset to RS responders ----------------------------------------------
+
+rs.responders = subset(proteomics.metadata, Group == "RS" & flare.group == "Remit")[,c("HM")] %>% unique()
+
+proteomics.asv.data.regressed.merge.rs = proteomics.asv.data.regressed.merge[grepl(paste(rs.responders, collapse="|"), rownames(proteomics.asv.data.regressed.merge)),]
+dim(proteomics.asv.data.regressed.merge.rs)
+# 27 samples x 444 features
+
+# subset to present in >20%
+proteomics.asv.data.regressed.merge.rs.pa = proteomics.asv.data.regressed.merge.rs
+proteomics.asv.data.regressed.merge.rs.pa[is.na(proteomics.asv.data.regressed.merge.rs.pa)] = 0
+proteomics.asv.data.regressed.merge.rs.pa[(proteomics.asv.data.regressed.merge.rs.pa)!=0] = 1
+proteomics.asv.data.regressed.merge.rs = proteomics.asv.data.regressed.merge.rs[,colSums(proteomics.asv.data.regressed.merge.rs.pa) >
+                                                                                  (nrow(proteomics.asv.data.regressed.merge.rs.pa)*0.2)]
+dim(proteomics.asv.data.regressed.merge.rs)
+# 27 samples x 427 samples
+
+# however, some end up having R = 1
+plot(proteomics.asv.data.regressed.merge.rs$ASV00105,
+     proteomics.asv.data.regressed.merge.rs$CIR1A)
+# which is fine for pearson
+
 # :: correlate ------------------------------------------------------------
 
 # calculate spearman between ASVs and proteins
-proteomics.asv.data.regressed.cor = Hmisc::rcorr(as.matrix(proteomics.asv.data.regressed.merge), type="spearman")
+proteomics.asv.data.regressed.cor = Hmisc::rcorr(as.matrix(proteomics.asv.data.regressed.merge.rs), type="spearman")
 # subset to important comparisons
 proteomics.asv.data.regressed.cor = cbind(reshape2::melt(proteomics.asv.data.regressed.cor$r),
                                           data.frame(p= reshape2::melt(proteomics.asv.data.regressed.cor$P)[,3])) %>%
   subset(Var1 != Var2) %>%
   arrange(-abs(value)) %>%
   mutate(type1 = ifelse(Var1 %in% protein.sig.protein, "protein", "ASV")) %>%
-  mutate(type2 = ifelse(Var2 %in% protein.sig.protein, "protein", "ASV")) %>%
-  subset(type1 != type2) %>%
-  subset(type1 == "ASV")
+  mutate(type2 = ifelse(Var2 %in% protein.sig.protein, "protein", "ASV")) #%>%
+  #subset(type1 != type2) %>%
+  #subset(type1 == "ASV")
 
 # add taxa
 proteomics.asv.data.regressed.cor$OTU = proteomics.asv.data.regressed.cor$Var1
@@ -2917,10 +3146,10 @@ proteomics.asv.data.regressed.cor.sig = proteomics.asv.data.regressed.cor %>%
   distinct() %>%
   mutate(padj = p.adjust(p, method="BH")) %>%
   mutate(sig = ifelse(padj < 0.05, "***", ifelse(padj < 0.20, "*", ""))) %>%
-  arrange(padj)
+  arrange(p)
 
 proteomics.asv.data.regressed.cor.sig %>%
-  arrange(-value)
+  arrange(padj)
 
 # among strongest correlation = Agathobacter rectalis == ACADM
 
@@ -2928,7 +3157,7 @@ proteomics.asv.data.regressed.cor.sig %>%
 
 library("network")
 cor_data <- proteomics.asv.data.regressed.cor.sig %>%
-  filter(padj < 0.20) %>%                                 # or p < 0.01 etc.
+  filter(p < 0.05 & value > 0) %>% # or p < 0.01 etc.
   select(protein, OTU, value, lca.gg2)
 
 # Create the bipartite network object -----------------------------------
@@ -2945,14 +3174,12 @@ set.edge.attribute(net, "sign",   ifelse(sign(cor_data$value) == 1, "Positive", 
 # Plot with ggnetwork ---------------------------------------------------
 library("ggnetwork")
 
-set.seed(25)
+set.seed(2)
 network.plot = ggnetwork(net)
 # fix ames
 network.plot$label = ifelse(network.plot$type == "Taxon", ifelse(grepl("s__", (network.plot$label)), paste("(s) ", gsub("g__", "", gsub("f__", "", gsub("s__", "", (network.plot$label)))), sep=""),
                                    paste("(", substr((network.plot$label), 1, 1), ") ", gsub("g__", "", gsub("f__", "", gsub("s__", "", (network.plot$label)))), sep="")),
                             network.plot$label)
-
-
 
 asv.protein.network.plot = ggplot(network.plot, aes(x, y, xend = xend, yend = yend)) +
   geom_edges(aes(size = weight, color = sign),
@@ -2960,9 +3187,9 @@ asv.protein.network.plot = ggplot(network.plot, aes(x, y, xend = xend, yend = ye
              show.legend = FALSE) +
   scale_size_continuous(range = c(0.3, 2.5)) +
   geom_nodes(aes(color = type, shape = type),
-             size = 8) +
-  scale_color_manual(values = c("Protein" = "lightgreen", "Taxon" = "plum",
-                                "Negative" = "#1f78b4", "Positive" = "#e31a1c")) +  # green vs orange
+             size = 5) +
+  scale_color_manual(values = c("Protein" = "lightblue", "Taxon" = "plum",
+                                "Negative" = "#1f78b4", "Positive" = "grey")) +  # green vs orange #e31a1c
   scale_shape_manual(values = c("Protein" = 19, "Taxon" = 15)) +  # circle vs square
   geom_nodetext_repel(data = subset(network.plot, type == "Protein"),
                        aes(label = label, x=x, y=y), size = 4, fontface = "bold", color = "black") +
@@ -2972,54 +3199,103 @@ asv.protein.network.plot = ggplot(network.plot, aes(x, y, xend = xend, yend = ye
   theme(legend.position = "none",
         legend.title = element_blank()) +
   labs(title = "Mucosal Proteome ↔ Microbiome Correlation Network",
-       subtitle = "Spearman | FDR < 0.20, edges sized by |ρ|") +
+       subtitle = "Spearman | 𝘱 < 0.05, edges sized by |ρ|") +
   theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
         plot.subtitle = element_text(hjust = 0.5, color = "grey40"))
 
 asv.protein.network.plot
 
 proteomics.asv.data.regressed.cor.sig %>%
-  subset(padj < 0.20) %>%
-  subset(protein == "ACADM")
-proteomics.asv.data.regressed.cor.sig %>%
-  subset(padj < 0.20) %>%
-  subset(protein == "SDHA")
-proteomics.asv.data.regressed.cor.sig %>%
-  subset(padj < 0.20) %>%
-  subset(protein == "SDHB")
-proteomics.asv.data.regressed.cor.sig %>%
-  subset(padj < 0.20) %>%
-  subset(protein == "PISD")
+  subset(p < 0.05) %>%
+  subset(grepl("bromii", lca.gg2))
 
-proteomics.asv.data.regressed.cor.sig %>%
-  subset(padj < 0.20) %>%
-  subset(protein == "NDUS3")
 
-proteomics.asv.data.regressed.cor.sig %>%
-  subset(padj < 0.20) %>%
-  subset(protein == "DHX30")
+proteomics.asv.data.regressed.cor.sig %>% 
+  # add oxphos label
+  mutate(oxphos = ifelse(protein %in% unique(subset(proteomics.data.group.interaction.lm.mito, grepl("OXPHOS", MitoPathways.Hierarchy))$protein), "oxphos", ""))%>%
+  arrange(-value) %>% 
+  head(n=20) %>%
+  subset(oxphos == "oxphos")
+ 
+# plot select correlations
+mpx.16s.cor.plot.1 = proteomics.asv.data.regressed.merge.rs %>%
+  dplyr::select(unique(subset(network.plot, label == "(s) Anaerostipes_hadrus")$vertex.names),
+                SURF1) %>%
+  ggplot(aes(x=ASV00296,
+             y=SURF1)) +
+  geom_point(fill="black", color="white", shape=21, size=3)+
+  geom_smooth(method="lm", fill="black", color="white")+
+  ggpubr::stat_cor(method="spearman", size=3)+
+  theme_classic()+
+  labs(x="Anaerostipes hadrus",
+       y="SURF1")
+  
+mpx.16s.cor.plot.2 = proteomics.asv.data.regressed.merge.rs %>%
+  dplyr::select(unique(subset(network.plot, label == "(s) Ruminococcus_E_bromii_B")$vertex.names),
+                DHX30) %>%
+  ggplot(aes(x=ASV00105,
+             y=DHX30)) +
+  geom_point(fill="black", color="white", shape=21, size=3)+
+  geom_smooth(method="lm", fill="black", color="white")+
+  ggpubr::stat_cor(method="spearman", size=3)+
+  theme_classic()+
+  labs(x="Ruminococcus bromii",
+       y="DHX30")
+
+mpx.16s.cor.plot.3 = proteomics.asv.data.regressed.merge.rs %>%
+  dplyr::select(unique(subset(network.plot, label == "(g) Faecalibacterium")$vertex.names),
+                SDHB) %>%
+  ggplot(aes(x=ASV00081,
+             y=SDHB)) +
+  geom_point(fill="black", color="white", shape=21, size=3)+
+  geom_smooth(method="lm", fill="black", color="white", size=1)+
+  ggpubr::stat_cor(method="spearman", size=3)+
+  theme_classic()+
+  labs(x="Faecalibacterium",
+       y="SDHB")
+
+
+
 # >>> FIGURES  -----------------------------------------------------------------
 
   # Host-Proteome PCA
 library("patchwork")
 ((proteomics.clean.pca.plot+
-   proteomics.clean.pca.permanova.plot+
+   proteomics.clean.pca.permanova.r2.plot+
    patchwork::plot_layout(widths=c(2,1)))/
   (proteomics.clean.pca.resp.plot+
-     proteomics.clean.pca.permanova.resp.plot+
+     proteomics.clean.pca.permanova.resp.r2.plot+
      patchwork::plot_layout(widths=c(2,1)))) %>%
   ggsave(filename="./lsarp_plots/2026_01_08_lsarp_3_proteome_pca.pdf",
          width=14, height=6,device = cairo_pdf)
 
 # ASV Bacteriome PCoA
 ((lsarp.mli.ps.pcoa.plot+
-    lsarp.mli.ps.permanova.plot+
+    lsarp.mli.ps.permanova.r2.plot+
     patchwork::plot_layout(widths=c(2,1)))/
     (lsarp.mli.ps.pcoa.resp.plot+
-       lsarp.mli.ps.resp.permanova.plot+
+       lsarp.mli.ps.resp.permanova.r2.plot+
        patchwork::plot_layout(widths=c(2,1)))) %>%
   ggsave(filename="./lsarp_plots/2026_01_08_lsarp_3_bacteriome_pca.pdf",
          width=14, height=6,device = cairo_pdf)
+
+# new version of PCoAs
+pca1 = (lsarp.mli.ps.pcoa.plot+
+          lsarp.mli.ps.permanova.r2.plot+
+          patchwork::plot_layout(widths=c(3,1)))
+pca2 = (lsarp.mli.ps.pcoa.resp.plot+
+          lsarp.mli.ps.resp.permanova.r2.plot+
+          patchwork::plot_layout(widths=c(3,1)))
+pca3 = (proteomics.clean.pca.plot+
+          proteomics.clean.pca.permanova.r2.plot+
+          patchwork::plot_layout(widths=c(3,1)))
+pca4 = (proteomics.clean.pca.resp.plot+
+          proteomics.clean.pca.permanova.resp.r2.plot+
+          patchwork::plot_layout(widths=c(3,1)))
+
+(pca1/pca2/pca3/pca4) %>%
+  ggsave(filename="./lsarp_plots/2026_03_03_lsarp_3_pca.pdf",
+         width=14, height=12,device = cairo_pdf)
 
 # Volcanos + Enrichment (Original Butyrogens)
 proteomics.heatmaps = (proteomics.data.group.interaction.lm.mito.heatmap + proteomics.data.group.interaction.lm.mito.resp.heatmap + patchwork::plot_layout(guides = "collect") & 
@@ -3059,21 +3335,16 @@ butyrogen.volcano.enrichments = (
   ggsave(filename="./lsarp_plots/2026_01_08_lsarp_3_volcanos_flagged_ii.pdf",
          width=20, height=8,device = cairo_pdf)
   
-
-proteomics.data.lasso.scores.plot+
-  proteomics.data.lasso.coefs.plot+
-  patchwork::plot_layout(widths=c(2,1))
-
-
-asv.protein.network.plot%>%
+(asv.protein.network.plot/
+  (mpx.16s.cor.plot.1+
+     mpx.16s.cor.plot.2+
+     mpx.16s.cor.plot.3+patchwork::plot_layout(nrow=1))+
+    patchwork::plot_layout(nrow=2, heights=c(3,1))) %>%
   ggsave(filename="./lsarp_plots/2026_01_08_lsarp_3_network.pdf",
-         width=8, height=6,device = cairo_pdf)
+         width=8, height=9,device = cairo_pdf)
 
 
 # correlations
-proteomics.asv.data.regressed.cor.sig %>%
-  subset(padj < 0.20) %>%
-  subset(protein %in% c("ACADM", "SDHA", "PISD"))
 
 ((but.enrich.sens.group.plot+
     but.enrich.sens.resp.plot)/
@@ -3081,10 +3352,55 @@ proteomics.asv.data.regressed.cor.sig %>%
     mito.enrich.sens.resp.plot)/
   (mito2.enrich.sens.group.plot+
      mito2.enrich.sens.resp.plot)) %>%
-  ggsave(filename="./lsarp_plots/2026_01_08_lsarp_supp_enrich_sens.pdf",
-         width=6, height=8, device = cairo_pdf)
+  ggsave(filename="./lsarp_plots/2026_03_04_lsarp_supp_enrich_sens.pdf",
+         width=7, height=8, device = cairo_pdf)
 
 # :: ----------------------------------------------------------------------
+
+
+# >>> Tables --------------------------------------------------------------
+
+# group mpx
+table1 = proteomics.data.group.interaction.lm.mito %>%
+  dplyr::select(protein, gene, coef, pval, padj, MitoPathway, MitoPathways.Hierarchy, mito, mito2) %>%
+  mutate(mito.mitocarta = mito,
+         mito.go = mito2) %>%
+  dplyr::select(-mito, -mito2)
+
+# group asv
+table2 = asv.data.group.rs.interaction.lm %>%
+  dplyr::select(OTU, lca.gg138, lca.gg2, coef, pval, padj, butyrogen.i) %>%
+  mutate(butyrogen = butyrogen.i) %>%
+  dplyr::select(-butyrogen.i) %>% distinct()
+
+# resp mpx (treatment)
+table3 = proteomics.data.group.interaction.resp.lm.mito %>%
+  dplyr::select(protein, gene, coef, pval, padj, MitoPathway, MitoPathways.Hierarchy, mito, mito2) %>%
+  mutate(mito.mitocarta = mito,
+         mito.go = mito2) %>%
+  dplyr::select(-mito, -mito2)
+
+# resp asv (treatment)
+table4 = asv.data.group.rs.interaction.lm.resp %>%
+  dplyr::select(OTU, lca.gg138, lca.gg2, coef, pval, padj, butyrogen.i) %>%
+  mutate(butyrogen = butyrogen.i) %>%
+  dplyr::select(-butyrogen.i) %>% distinct()
+
+# correlations (butyrogens sig correlated with mitochondrial proteins)
+table5 = proteomics.asv.data.regressed.cor.sig %>%
+  dplyr::select(-butyrogen.i, -mito, -type1, -type2, -sig)
+
+
+openxlsx::write.xlsx(
+  list(
+    `st 30 mli_asv` = table2,
+    `st 31 mli_asv_resp` = table4,
+    `st 32 mli_mpx` = table1,
+    `st 33 mli_mpx_resp` = table3,
+    `st 34 mli_cor` = table5
+  ),
+  
+  "lsarp_paper/lsarp_heatmap_source_mli.xlsx")
 
 
 # >>>  SENSITIVITY ----------------------------------------------------------
